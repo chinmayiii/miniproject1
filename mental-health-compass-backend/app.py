@@ -46,7 +46,7 @@ app = Flask(__name__)
 CORS(app)
 
 
-@app.route("/")
+@app.route('/')
 def health_check():
     return "OK", 200
 
