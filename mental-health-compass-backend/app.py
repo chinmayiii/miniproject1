@@ -46,6 +46,11 @@ app = Flask(__name__)
 CORS(app)
 
 
+@app.route('/')
+def home():
+    return "Hello! The Flask server is running."
+
+
 # --- CHAT FUNCTION ---
 @app.route("/chat_real", methods=["POST"])
 def chat_real():
@@ -175,4 +180,9 @@ def predict_questionnaire():
     except Exception as e:
         print(f"Error in /predict_questionnaire: {e}")
         return jsonify({"error": "Failed to process questionnaire"}), 500
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
 
