@@ -47,8 +47,8 @@ CORS(app)
 
 
 @app.route('/')
-def home():
-    return "Hello! The Flask server is running."
+def health_check():
+    return "OK", 200
 
 
 # --- CHAT FUNCTION ---
