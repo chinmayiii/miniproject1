@@ -46,7 +46,7 @@ app = Flask(__name__)
 CORS(app)
 
 
-@app.route('/')
+@app.route("/")
 def health_check():
     return "OK", 200
 
@@ -182,7 +182,6 @@ def predict_questionnaire():
         return jsonify({"error": "Failed to process questionnaire"}), 500
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False)
-
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False)

@@ -30,6 +30,7 @@ gradio_client==1.13.3
 groovy==0.1.2
 grpcio==1.76.0
 grpcio-status==1.71.2
+gunicorn
 h11==0.16.0
 httpcore==1.0.9
 httplib2==0.31.0
