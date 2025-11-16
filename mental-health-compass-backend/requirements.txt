@@ -1,5 +1,4 @@
 gunicorn
-app:appaccelerate==1.11.0
 aiofiles==24.1.0
 annotated-doc==0.0.3
 annotated-types==0.7.0
