@@ -1,187 +1,206 @@
-# --- START: CRITICAL DIAGNOSTIC ---
-# This code runs only once when the server starts.
-# It will print the exact version of the Google AI library being used.
-# If this version is low (e.g., 0.2.0), it PROVES the wrong environment is being used.
-# A correct version should be 0.5.0 or higher.
-try:
-    import google.generativeai
-
-    print("--- DIAGNOSTIC START ---")
-    print(
-        f"SUCCESS: Found google.generativeai version: {google.generativeai.__version__}"
-    )
-    print("--- DIAGNOSTIC END ---")
-except Exception as e:
-    print("--- DIAGNOSTIC START ---")
-    print(f"CRITICAL FAILURE: Could not import google.generativeai. Error: {e}")
-    print("--- DIAGNOSTIC END ---")
-# --- END: CRITICAL DIAGNOSTIC ---
-
-
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os
 import pickle
-import numpy as np
-from dotenv import load_dotenv
-
-# Load environment and configure Gemini
 import google.generativeai as genai
 
-load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# ----------------------------------
+# GEMINI SETUP
+# ----------------------------------
+GEMINI_API_KEY = "AIzaSyAV8TMbqo3ep11Sw5SV7Y64AYRb6ZVLb5c"
 genai.configure(api_key=GEMINI_API_KEY, transport="rest")
+gpt_model = genai.GenerativeModel("models/gemini-2.5-flash")
 
-# Define safety settings BEFORE model initialization
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
+# ----------------------------------
+# FLASK APP
+import jwt
+import datetime
 
-model = genai.GenerativeModel("gemini-1.0-pro", safety_settings=safety_settings)
-
+# JWT secret key (use a strong random value in production)
+JWT_SECRET = "your_jwt_secret_key"
+JWT_ALGORITHM = "HS256"
+JWT_EXP_DELTA_SECONDS = 3600
+# ----------------------------------
 app = Flask(__name__)
 CORS(app)
 
+# ----------------------------------
+# MONGODB ATLAS SETUP
+# ----------------------------------
+from pymongo import MongoClient
 
-@app.route('/')
-def health_check():
-    return "OK", 200
+MONGO_URI = "mongodb+srv://chinmayi:cudA4DfFCs2HxW3H@cluster0.tal0ccu.mongodb.net/?appName=Cluster0"  # <-- Paste your key here
+client = MongoClient(MONGO_URI)
+db = client["mental_health"]  # Use your database name
+users_collection = db["users"]  # Use your collection name
+
+# ----------------------------------
+# LOAD ALL ML MODELS
+# ----------------------------------
+condition_model = pickle.load(open("condition_model.pkl", "rb"))
+vectorizer = pickle.load(open("vectorizer.pkl", "rb"))
+
+questionnaire_model = pickle.load(open("model.pkl", "rb"))
+scaler = pickle.load(open("scaler.pkl", "rb"))
+
+# ----------------------------------
+# CHAT MEMORY
+# ----------------------------------
+conversation_history = []
 
 
-# --- CHAT FUNCTION ---
+# ----------------------------------
+# GEMINI HELPER
+# ----------------------------------
+def ask_gemini(prompt):
+    response = gpt_model.generate_content(prompt)
+    return response.text
+
+
+# ----------------------------------
+# CHAT ENDPOINT (Stores full chat)
+# ----------------------------------
 @app.route("/chat_real", methods=["POST"])
 def chat_real():
-    final_history_for_error_log = "History failed to build."
     try:
-        print("--- DEBUG: /chat_real endpoint called ---")
-        frontend_history = request.json["history"]
-        print(f"--- DEBUG: Received history: {frontend_history}")
-        clean_history = []
-        for message in frontend_history:
-            if (
-                "Failed to get a response" in message["text"]
-                or "Failed to fetch" in message["text"]
-            ):
-                continue
-            current_role = "user" if message["sender"] == "user" else "model"
-            if not clean_history or clean_history[-1]["role"] != current_role:
-                clean_history.append(
-                    {"role": current_role, "parts": [{"text": message["text"]}]}
-                )
-
-        final_history_for_error_log = [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "text": "You are 'Compass,' a kind, empathetic listening bot. Your purpose is to help users explore their feelings. Keep your responses short and conversational (1-3 sentences). Ask gentle, open-ended questions. Never give medical advice. Your goal is to listen and support. Your responses should be plain text, without any markdown."
-                    }
-                ],
-            },
-            {
-                "role": "model",
-                "parts": [
-                    {"text": "Understood. I am Compass, and I am ready to listen."}
-                ],
-            },
-        ] + clean_history
-
-        print(f"--- DEBUG: Final history for Gemini: {final_history_for_error_log}")
-        print("--- DEBUG: About to call Gemini API ---")
-        try:
-            response_stream = model.generate_content(
-                final_history_for_error_log, stream=True
-            )
-            print("--- DEBUG: Gemini API call returned ---")
-        except Exception as e:
-            print("--- ERROR: Gemini API call failed ---")
-            print(e)
-            raise
-
-        def generate():
-            for chunk in response_stream:
-                print(f"--- DEBUG: Streaming chunk: {chunk.text}")
-                yield chunk.text
-
-        return Response(generate(), mimetype="text/plain")
+        user_msg = request.json["message"]
+        conversation_history.append({"user": user_msg})
+        bot_reply = ask_gemini(
+            f"You are a friendly and simple chatbot. Reply casually.\nUser: {user_msg}"
+        )
+        conversation_history.append({"bot": bot_reply})
+        return jsonify({"reply": bot_reply})
     except Exception as e:
-        print(f"--- ERROR IN /chat_real ---")
-        print(f"The exact error is: {e}")
-        print("--- FAILING HISTORY ---")
-        print(final_history_for_error_log)
-        print("--- END HISTORY ---")
-        return Response(f"Error: {e}", status=500)
+        return jsonify({"error": "Chat failed"}), 500
 
 
-# --- SUMMARIZE FUNCTION ---
-@app.route("/summarize_chat", methods=["POST"])
+# ----------------------------------
+# SUMMARY ENDPOINT
+# ----------------------------------
+@app.route("/summarize_chat", methods=["GET"])
 def summarize_chat():
     try:
-        frontend_history = request.json["history"]
-        conversation_text = "\n".join(
-            [
-                f"{'User' if msg['sender'] == 'user' else 'Bot'}: {msg['text']}"
-                for msg in frontend_history
-            ]
+        conditions = []
+        for msg in conversation_history:
+            if "user" in msg:
+                vector = vectorizer.transform([msg["user"]])
+                pred = condition_model.predict(vector)[0]
+                conditions.append(pred)
+        full_chat_text = "\n".join([m.get("user", "") for m in conversation_history])
+        final_summary = ask_gemini(
+            f"Summarize this full chat in 5-7 clean lines:\n\n{full_chat_text}"
         )
-        summary_prompt = (
-            "You have two tasks. First, analyze the following conversation and classify the user's likely mental state into one of three categories: Normal, Depression, or Severe. "
-            "Second, write a gentle, one-paragraph summary for the user, reflecting on their feelings. "
-            "Your entire response MUST be in the following format, with nothing else:\n"
-            "[CLASSIFICATION]: YourClassificationHere\n[SUMMARY]: YourSummaryHere\n\n"
-            f"Here is the conversation:\n{conversation_text}"
+        condition_summary = ask_gemini(
+            f"Based on ML predicted emotional states {conditions}, write a psychological explanation."
         )
-        response = model.generate_content(
-            summary_prompt, safety_settings=safety_settings
+        return jsonify(
+            {
+                "conversation_summary": final_summary,
+                "predicted_conditions": conditions,
+                "condition_summary": condition_summary,
+            }
         )
-        parts = response.text.split("[SUMMARY]:")
-        prediction = parts[0].replace("[CLASSIFICATION]:", "").strip()
-        summary = (
-            parts[1].strip() if len(parts) > 1 else "Could not generate a summary."
-        )
-        if prediction not in ["Normal", "Depression", "Severe"]:
-            prediction = "Normal"
-        return jsonify({"summary": summary, "prediction": prediction})
-    except Exception as e:
-        print(f"--- ERROR IN /summarize_chat ---: {e}")
-        return jsonify({"error": "Failed to summarize the chat."}), 500
+    except Exception:
+        return jsonify({"error": "Summary failed"}), 500
 
 
-# --- QUESTIONNAIRE PREDICTION ---
-try:
-    with open("model.pkl", "rb") as f:
-        questionnaire_model = pickle.load(f)
-    with open("scaler.pkl", "rb") as f:
-        scaler = pickle.load(f)
-    print("Questionnaire models loaded successfully.")
-except FileNotFoundError:
-    print("Warning: 'model.pkl' or 'scaler.pkl' not found.")
-    questionnaire_model = None
-    scaler = None
+# ----------------------------------
+# QUESTIONNAIRE PREDICTION ENDPOINT
+# ----------------------------------
+def get_suggestions(prediction):
+    if prediction == "Normal":
+        return ["Go for a walk", "Listen to music", "Talk to friends"]
+    elif prediction == "Depression":
+        return ["Talk to a counselor", "Take frequent breaks", "Practice mindfulness"]
+    else:
+        return [
+            "Seek professional help",
+            "Talk to a therapist",
+            "Get emotional support",
+        ]
 
 
 @app.route("/predict_questionnaire", methods=["POST"])
 def predict_questionnaire():
-    if not questionnaire_model or not scaler:
-        return jsonify({"error": "Questionnaire model not loaded on server"}), 500
     try:
         data = request.get_json()
-        features = np.array(data["features"]).reshape(1, -1)
-        scaled_features = scaler.transform(features)
-        prediction = int(questionnaire_model.predict(scaled_features)[0])
-        labels = ["Normal", "Depression", "Severe"]
-        result_label = (
-            labels[prediction] if 0 <= prediction < len(labels) else "Unknown"
-        )
-        return jsonify({"prediction": result_label})
-    except Exception as e:
-        print(f"Error in /predict_questionnaire: {e}")
-        return jsonify({"error": "Failed to process questionnaire"}), 500
+        features = data.get("features")
+        features_scaled = scaler.transform([features])
+        prediction = questionnaire_model.predict(features_scaled)[0]
+        if prediction == 0:
+            label = "Normal"
+        elif prediction == 1:
+            label = "Depression"
+        else:
+            label = "Severe"
+        suggestions = get_suggestions(label)
+        return jsonify({"prediction": label, "suggestions": suggestions})
+    except Exception:
+        return jsonify({"error": "Prediction failed"}), 500
 
+
+# ----------------------------------
+# RUN APP
+# ----------------------------------
+@app.route("/signup", methods=["POST"])
+def signup():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+    if not email or not password:
+        return jsonify({"error": "Email and password required"}), 400
+    if users_collection.find_one({"email": email}):
+        return jsonify({"error": "User already exists"}), 409
+    users_collection.insert_one({"email": email, "password": password})
+    return jsonify({"message": "Signup successful"}), 201
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+    if not email or not password:
+        return jsonify({"error": "Email and password required"}), 400
+    user = users_collection.find_one({"email": email})
+    if user and user.get("password") == password:
+        payload = {
+            "email": email,
+            "exp": datetime.datetime.utcnow()
+            + datetime.timedelta(seconds=JWT_EXP_DELTA_SECONDS),
+        }
+        token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        return jsonify({"message": "Login successful", "token": token}), 200
+    return jsonify({"error": "Invalid credentials"}), 401
+
+
+# Example protected endpoint
+from functools import wraps
+
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if "Authorization" in request.headers:
+            token = request.headers["Authorization"].split("Bearer ")[-1]
+        if not token:
+            return jsonify({"error": "Token is missing!"}), 401
+        try:
+            jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token has expired!"}), 401
+        except Exception:
+            return jsonify({"error": "Token is invalid!"}), 401
+        return f(*args, **kwargs)
+
+    return decorated
+
+
+# Example usage:
+# @app.route('/protected', methods=['GET'])
+# @token_required
+# def protected():
+#     return jsonify({'message': 'This is a protected route'})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="127.0.0.1", port=5000, debug=False)
