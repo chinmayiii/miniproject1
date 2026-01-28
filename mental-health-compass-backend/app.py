@@ -28,7 +28,7 @@ CORS(app)
 # ----------------------------------
 from pymongo import MongoClient
 
-MONGO_URI = "mongodb+srv://chinmayi:cudA4DfFCs2HxW3H@cluster0.tal0ccu.mongodb.net/?appName=Cluster0"  # <-- Paste your key here
+MONGO_URI = "mongodb+srv://chinmayibellippadi:Hei0jcAcFcysrbHG@cluster0.htr46zp.mongodb.net/?appName=Cluster0"  # <-- Paste your key here
 client = MongoClient(MONGO_URI)
 db = client["mental_health"]  # Use your database name
 users_collection = db["users"]  # Use your collection name
